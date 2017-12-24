@@ -19,6 +19,8 @@
 #define CHANNEL_DIV 1
 #define MODE_DIV 1
 #define BUTTON_DELAY_MS 333.0
+#define INVERT_BUTTON
+
 
 #define BUTTON_DELAY (uint16_t)(BUTTON_DELAY_MS * 31.25);
 enum DMXMANMode { DMX, MAN };
@@ -128,6 +130,9 @@ void setup_btn(){
 	//Setup PC2 to HIGH level event trigger and pull up ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 	PORTC_OUTCLR = (1 << 2);
 	PORTC_PIN2CTRL = PORT_OPC_PULLUP_gc | PORT_ISC_LEVEL_gc;
+	#ifdef INVERT_BUTTON
+		PORTC_PIN2CTRL |= PORT_INVEN_bm;
+	#endif
 	//Setup event channel 3 for PC2
 	EVSYS_CH3MUX = EVSYS_CHMUX_PORTC_PIN2_gc;
 	//Hold the counter 0 for as long as the button is not pressed. When the counter reaches a compare value an interrupt will be triggered. The INVEN bit is immediately set so the event system
@@ -179,7 +184,7 @@ void DMX_init(){
 	TCC1_CTRLB = TC_WGMODE_NORMAL_gc;//Set WGM to FRQ
 	//TCC1_INTCTRLA = TC_OVFINTLVL_HI_gc; //Set OVF int priority to HIGH
 	TCC1_CTRLD = TC_EVACT_RESTART_gc | TC_EVSEL_CH2_gc;
-	TCC1_PER = 41; //Interrupt every 80 us
+	TCC1_PER = 599; //Interrupt every 1196 us
 	//Setup USART
 	//USARTD0_CTRLA = USART_RXCINTLVL_MED_gc;
 	//USARTD0_CTRLB = USART_RXEN_bm;
@@ -250,7 +255,7 @@ void updateDisp(){
 	char temp [33];
 	uint32_t i = 0;
 	bool toBlink = false;
-	for(i = 0; i < 32; i++){//Check if any changes in diplayData have occured, if so reset blink timer
+	for(i = 0; i < 32; i++){//Check if any changes in diplayData have occurred, if so reset blink timer
 		if(oldToBeDispData[i] != *(toBeDispPtr + i)){
 			RTC_CNT = 0;
 			editCounter = 0;
@@ -465,13 +470,22 @@ void setEncMode(encoderMode tempMode){
 
 //All ISR
 ISR(TCD0_CCA_vect){
-	PORTC_PIN2CTRL &= ~PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
+	#ifdef INVERT_BUTTON
+		PORTC_PIN2CTRL |= PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
+	#else
+		PORTC_PIN2CTRL &= ~PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
+    #endif
+	
 	TCD0_INTCTRLB &= ~TC_CCAINTLVL_LO_gc;
 } 
 
 //PC2 interrupt when button is pressed
 ISR(TCD0_OVF_vect){
-	PORTC_PIN2CTRL |= PORT_INVEN_bm;//Invert PC2 so TCD0 stays 0, until the button is released
+	#ifdef INVERT_BUTTON
+		PORTC_PIN2CTRL &= ~PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
+	#else
+		PORTC_PIN2CTRL |= PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
+	#endif
 	TCD0_INTCTRLB = TC_CCAINTLVL_LO_gc; //Setup compare interrupt so input will be un-inverted after release
 	if(!editMode){
 		TCD0_PER = 1000; //Set debounce timer for short press detection
@@ -599,7 +613,7 @@ ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
 	if(cnt == DMXChan + 1){//If DMX channel matches the set DMX channel + 1
 		//LCD_PRINTDEC(USART_data, 0, 5);
 		finalRes |= USART_data; //Buffer LSB
-		TCE0_CCA = finalRes; //Set compare register for PWM
+		TCE0_CCABUF = finalRes; //Set compare register for PWM
 		
 		lt = true;
 	}
@@ -617,9 +631,9 @@ ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
 }
 
 ISR(TCC1_OVF_vect){
-	cnt = 0; //Reset counter if there hasn't been any signal change in 80 us on the DMX line (PD2)
+	cnt = 0; //Reset counter if there hasn't been any signal change in 1196 us on the DMX line (PD2)
 	DMXErrCnt++;
-	if((DMXErrCnt > 13000) && !DMXErrFlag){
+	if((DMXErrCnt > 836) && !DMXErrFlag){ //If there hasn't been any change in 1 second
 		DMXErrFlag = true;
 		LCD_PRINT("NO DMX", 10);
 		lt = true;
