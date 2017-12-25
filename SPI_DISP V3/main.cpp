@@ -18,7 +18,8 @@
 #define BRIGHTNESS_DIV 1
 #define CHANNEL_DIV 1
 #define MODE_DIV 1
-#define BUTTON_DELAY_MS 333.0
+//How long it takes before the dimmer goes into edit mode
+#define BUTTON_DELAY_MS 700.0
 #define INVERT_BUTTON
 
 
@@ -62,6 +63,10 @@ volatile bool CCB_flag = false;
 volatile bool CCA_firstSam = false;
 volatile bool CCB_firstSam = false;
 volatile bool OVF_firstSam = false;
+volatile bool blinkTimeoutIgnore = false;
+//Bool when the button has to wait for a long press
+volatile bool longPressDetection = false;
+
 
 
 
@@ -92,6 +97,8 @@ inline void send_SPI(uint8_t SPIdata){
 	PORTC_OUTSET = (1 << SS_PIN);
 	_delay_us(25);
 }
+
+
 
 void setup_blink(){
 	OSC_CTRL |= OSC_RC32KEN_bm;
@@ -127,12 +134,14 @@ void setup_btn(){
 	TCD0_PER = BUTTON_DELAY;//TCD0 will overflow in exactly ... seconds
 	TCD0_INTCTRLA = TC_OVFINTLVL_LO_gc;
 	TCD0_CCA = 1;
+	TCD0_CCB = 0;
 	//Setup PC2 to HIGH level event trigger and pull up ?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 	PORTC_OUTCLR = (1 << 2);
 	PORTC_PIN2CTRL = PORT_OPC_PULLUP_gc | PORT_ISC_LEVEL_gc;
 	#ifdef INVERT_BUTTON
 		PORTC_PIN2CTRL |= PORT_INVEN_bm;
 	#endif
+
 	//Setup event channel 3 for PC2
 	EVSYS_CH3MUX = EVSYS_CHMUX_PORTC_PIN2_gc;
 	//Hold the counter 0 for as long as the button is not pressed. When the counter reaches a compare value an interrupt will be triggered. The INVEN bit is immediately set so the event system
@@ -173,6 +182,8 @@ void QDEC_INIT(){
 	TCC0_CCB = TC0_CCB_CHANNEL_MODE;
 	//TCC0_PER = 770;
 }
+
+
 
 void DMX_init(){
 	//Setup event system to reset TCC1 on any edge of PD2
@@ -408,12 +419,24 @@ void setMode(DMXMANMode tempMode){
 void update_RAM_EEPROM(){ //Updates RAM with all brightness, mode and DMX information from values stored in the EEPROM
 	brightness = eeprom_read_word(BRIGHTNESS_addr);
 	DMXChan = eeprom_read_word(DMX_addr);
-	setScrnAndPWM(brightness);
 	if(eeprom_read_byte(MODE_addr)){
+		setScrnAndPWM(brightness);
 		setMode(MAN);
 	}
 	else{
 		setMode(DMX);
+	}
+}
+
+void setPermanentMode(bool temp){
+	if(blinkTimeoutIgnore != temp){
+		if(temp){
+			LCD_PRINT("P", 15);
+		}
+		else{
+			LCD_PRINT(" ", 15);
+		}
+		blinkTimeoutIgnore = temp;
 	}
 }
 
@@ -468,6 +491,16 @@ void setEncMode(encoderMode tempMode){
 	}
 }
 
+void exitEditMode(){
+	setEncMode(OFF);
+	currBlinkMaskPtr = NULLBlinkVal;
+	editMode = false;
+	TCD0_PER = 31250;//Set required button press time to 1 second
+	setPermanentMode(false);
+}
+
+
+
 //All ISR
 ISR(TCD0_CCA_vect){
 	#ifdef INVERT_BUTTON
@@ -479,14 +512,13 @@ ISR(TCD0_CCA_vect){
 	TCD0_INTCTRLB &= ~TC_CCAINTLVL_LO_gc;
 } 
 
-//PC2 interrupt when button is pressed
-ISR(TCD0_OVF_vect){
-	#ifdef INVERT_BUTTON
-		PORTC_PIN2CTRL &= ~PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
-	#else
-		PORTC_PIN2CTRL |= PORT_INVEN_bm; //When the button is released and TCD0 starts counting up again set PC2 direction to normal
-	#endif
-	TCD0_INTCTRLB = TC_CCAINTLVL_LO_gc; //Setup compare interrupt so input will be un-inverted after release
+ISR(TCD0_CCB_vect){
+	TCD0_PER = 1000; //Set debounce timer for short press detection
+	longPressDetection = false;
+	TCD0_INTCTRLB &= ~TC_CCBINTLVL_LO_gc; //Disable interrupt
+}
+
+void buttonRegularResponse(){
 	if(!editMode){
 		TCD0_PER = 1000; //Set debounce timer for short press detection
 		editMode = true;
@@ -496,49 +528,74 @@ ISR(TCD0_OVF_vect){
 	if(currentMode == DMX){
 		switch(currentSelector){
 			case 0:
-				currBlinkMaskPtr = DMXBlinkVal0;
-				setEncMode(MODESEL);
-				break;
+			currBlinkMaskPtr = DMXBlinkVal0;
+			setEncMode(MODESEL);
+			break;
 			case 1:
-				currBlinkMaskPtr = DMXBlinkVal1;
-				dmxMult = 100;
-				setEncMode(CHANSEL);
-				break;
+			currBlinkMaskPtr = DMXBlinkVal1;
+			dmxMult = 100;
+			setEncMode(CHANSEL);
+			break;
 			case 2:
-				currBlinkMaskPtr = DMXBlinkVal2;
-				dmxMult = 10;
-				break;
+			currBlinkMaskPtr = DMXBlinkVal2;
+			dmxMult = 10;
+			break;
 			case 3:
-				currBlinkMaskPtr = DMXBlinkVal3;
-				dmxMult = 1;
-				break;
+			currBlinkMaskPtr = DMXBlinkVal3;
+			dmxMult = 1;
+			break;
 			case 4:
-				setEncMode(OFF);
-				currBlinkMaskPtr = NULLBlinkVal;
-				editMode = false;
-				TCD0_PER = BUTTON_DELAY;//Set required button press time to 1 second
-				break;
+			exitEditMode();
+			break;
 		}
 	}
 	if(currentMode == MAN){
 		switch(currentSelector){
 			case 0:
-				currBlinkMaskPtr = MANBlinkVal0;
-				setEncMode(MODESEL);
-				break;
+			currBlinkMaskPtr = MANBlinkVal0;
+			setEncMode(MODESEL);
+			break;
 			case 1:
-				currBlinkMaskPtr = MANBlinkVal1;
-				setEncMode(BRIGHTSEL);
-				break;
+			TCD0_CNT = 1;
+			TCD0_PER = 46875;
+			TCD0_CCB = 0;
+			TCD0_INTFLAGS |= (1 << 5); //Clear flag because the timer was just at 0
+			longPressDetection = true;
+			TCD0_INTCTRLB |= TC_CCBINTLVL_LO_gc; //When the button is released before the longPress mark, return to normal operation
+			currBlinkMaskPtr = MANBlinkVal1;
+			setEncMode(BRIGHTSEL);
+			break;
 			case 2:
-				currBlinkMaskPtr = NULLBlinkVal;
-				editMode = false;
-				setEncMode(OFF);
-				TCD0_PER = BUTTON_DELAY;//Set required button press time to 1 second
-				break;
+			exitEditMode();
+			break;
 		}
 	}
 	currentSelector++;
+}
+
+//PC2 interrupt when button is pressed
+ISR(TCD0_OVF_vect){
+	
+	if(longPressDetection){
+		setPermanentMode(true);
+		
+		TCD0_INTCTRLB &= ~TC_CCBINTLVL_LO_gc;
+		longPressDetection = false;
+		//Short press detection again
+		TCD0_PER = 1000;
+	}
+	else{
+		buttonRegularResponse();
+	}
+	if(!longPressDetection){
+		#ifdef INVERT_BUTTON
+			PORTC_PIN2CTRL &= ~PORT_INVEN_bm; //Invert button behaviour
+		#else
+			PORTC_PIN2CTRL |= PORT_INVEN_bm;
+		#endif
+		TCD0_INTCTRLB |= TC_CCAINTLVL_LO_gc; //Setup compare interrupt so input will be un-inverted after release
+	}
+	
 }
 
 ISR(TCC0_OVF_vect){
@@ -595,12 +652,18 @@ ISR(TCC0_CCB_vect){
 }
 
 ISR(RTC_OVF_vect){
-	editCounter++;
+	
+	if(blinkTimeoutIgnore){
+		editCounter = 0;
+	}
+	else
+	{
+		editCounter++;
+	}
 	if(editCounter > 15){
-		setEncMode(OFF);
-		currBlinkMaskPtr = NULLBlinkVal;
-		editMode = false;
-		TCD0_PER = 31250;//Set required button press time to 1 second
+		longPressDetection = false;
+		TCD0_INTCTRLB &= ~TC_CCBINTLVL_LO_gc; //Disable interrupt
+		exitEditMode();
 	}
 }
 
