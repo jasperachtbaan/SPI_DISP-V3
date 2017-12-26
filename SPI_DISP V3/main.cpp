@@ -19,7 +19,7 @@
 #define CHANNEL_DIV 1
 #define MODE_DIV 1
 //How long it takes before the dimmer goes into edit mode
-#define BUTTON_DELAY_MS 700.0
+#define BUTTON_DELAY_MS 250.0
 #define INVERT_BUTTON
 
 
@@ -147,6 +147,8 @@ void setup_btn(){
 	//Hold the counter 0 for as long as the button is not pressed. When the counter reaches a compare value an interrupt will be triggered. The INVEN bit is immediately set so the event system
 	//will keep the counter at 0 so the interrupt won't be triggered when the button is kept pressed. Another compare value is set so when the button is released again the INVEN bit can be reset
 	//and the button is ready for another press.
+	//When the DMX controller waits for a long pulse, the INVEN bit is not set yet when the first compare triggers. THe compare is set to a large value (1.5S) and when the compare is reached again the 'long press' code is executed.
+	//When the button is released within this period the compare values are reset again by the B compare channel.
 }
 
 void setup_int(){
@@ -447,7 +449,6 @@ void setEncMode(encoderMode tempMode){
 		TCC0_CTRLA &= ~TC_CLKSEL_DIV1_gc;
 		TCC0_INTCTRLA &= ~TC_OVFINTLVL_LO_gc;
 		TCC0_INTCTRLB &= ~(TC_CCAINTLVL_LO_gc | TC_CCBINTLVL_LO_gc);
-		//Insert EEPROM write code here
 		update_EEPROM_RAM();
 		break;
 
@@ -465,17 +466,16 @@ void setEncMode(encoderMode tempMode){
 		break;
 
 		case CHANSEL:
-		#define TCC0_CNT_CHANNEL (int)(160 * CHANNEL_DIV)
-		#define TCC0_PER_CHANNEL (int)(320 * CHANNEL_DIV)
+		#define TCC0_CNT_CHAN (int)(160 * CHANNEL_DIV)
+		#define TCC0_PER_CHAN (int)(320 * CHANNEL_DIV)
+		TCC0_CNT = TCC0_CNT_CHAN;
+		TCC0_CTRLB &= ~TC_WGMODE_DS_B_gc;
+		TCC0_PER = TCC0_PER_CHAN;
+		TCC0_INTCTRLA |= TC_OVFINTLVL_LO_gc;
+		OVF_firstSam = true;
+		TCC0_INTCTRLB &= ~(TC_CCAINTLVL_LO_gc | TC_CCBINTLVL_LO_gc);
 		EncoderMode = CHANSEL;
 		TCC0_CTRLA |= TC_CLKSEL_DIV1_gc;
-		TCC0_CTRLB &= ~TC_WGMODE_DS_B_gc;
-		TCC0_PER = TCC0_PER_CHANNEL;
-		TCC0_CNT = TCC0_CNT_CHANNEL;
-		TCC0_INTCTRLA &= ~TC_OVFINTLVL_LO_gc;
-		TCC0_INTCTRLB |= TC_CCAINTLVL_LO_gc | TC_CCBINTLVL_LO_gc;
-		CCA_firstSam = true;
-		CCB_firstSam = true;
 		break;
 
 		case BRIGHTSEL:
@@ -495,7 +495,7 @@ void exitEditMode(){
 	setEncMode(OFF);
 	currBlinkMaskPtr = NULLBlinkVal;
 	editMode = false;
-	TCD0_PER = 31250;//Set required button press time to 1 second
+	TCD0_PER = BUTTON_DELAY;
 	setPermanentMode(false);
 }
 
@@ -599,56 +599,37 @@ ISR(TCD0_OVF_vect){
 }
 
 ISR(TCC0_OVF_vect){
-	TCC0_CNT = TCC0_CNT_MODE;
 	if(!OVF_firstSam){
-		if(currentMode == MAN){
-			setMode(DMX);
-		}
-		else{
-			setMode(MAN);
-		}
-	}
-	else{
-		OVF_firstSam = false;
-	}
-}
-
-ISR(TCC0_CCA_vect){
-	if(!CCA_firstSam){
-		if(CCB_flag){
-			CCB_flag = false;
-		}
-		else{
-			CCA_flag = true;
-			if(DMXChan - dmxMult >= DMXmin){
+		if(EncoderMode == CHANSEL){
+			if(DMXChan - dmxMult >= DMXmin && TCC0_CNT >= TCC0_CNT_CHAN){
 				DMXChan -= dmxMult;
 				LCD_PRINTDEC(DMXChan, 22, 3);
 				LCD_PRINTDEC(DMXChan + 1, 28, 3);
 			}
-		}
-	}
-	else{
-		CCA_firstSam = false;
-	}
-}
-
-ISR(TCC0_CCB_vect){
-	if(!CCB_firstSam){
-		if(CCA_flag){
-			CCA_flag = false;
-		}
-		else{
-			CCB_flag = true;
-			if(DMXChan + dmxMult <= DMXMax){
+			else if(DMXChan + dmxMult <= DMXMax && TCC0_CNT < TCC0_CNT_CHAN){
 				DMXChan += dmxMult;
 				LCD_PRINTDEC(DMXChan, 22, 3);
 				LCD_PRINTDEC(DMXChan + 1, 28, 3);
 			}
+			TCC0_CNT = TCC0_CNT_CHAN;
 		}
+		else{
+			
+			if(TCC0_CNT < TCC0_CNT_MODE){
+				setMode(DMX);
+			}
+			else{
+				setMode(MAN);
+			}
+			TCC0_CNT = TCC0_CNT_MODE;
+		}
+
 	}
 	else{
-		CCB_firstSam = false;
+		
+		OVF_firstSam = false;
 	}
+	
 }
 
 ISR(RTC_OVF_vect){
