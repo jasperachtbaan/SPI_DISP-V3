@@ -158,10 +158,12 @@ void setup_int(){
 
 void setup_PWM(){
 	TCE0_CCA = 0;
-	PORTE_DIRSET = (1 << 0);
 	TCE0_CTRLA = 0b10; //Set CLK/2
 	TCE0_CTRLB = 0b11 | (1 << 4); //Set singleslope PWM and enable PWM on 0C1A
 	TCE0_PER = 0xFFFE; //Fixes problem that brightness doesn't go up to 100%
+	//Wait for timer to stabilize
+	_delay_ms(10);
+	PORTE_DIRSET |= (1 << 0);
 }
 
 void QDEC_INIT(){
@@ -691,7 +693,6 @@ int main(void)
 	PORTC_DIRSET = (1 << MOSI_PIN) | (1 << SS_PIN) | (1 << SCK_PIN) | (1 << RS_PIN); //Set all pins used for communication to output
 	clk_set_32MHz();
 	_delay_ms(70);
-	setup_PWM();
 	update_RAM_EEPROM();
     setup_SPI();
     _delay_ms(100);
@@ -702,6 +703,7 @@ int main(void)
 	DMX_init();
 	updateDisp();
 	setup_int();
+	setup_PWM();
 
     while (1) 
     {
