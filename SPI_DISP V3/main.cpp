@@ -15,7 +15,7 @@
 #define RS_PIN 3
 #define TCC1_MAX 31250
 //Some dividers, can be changed if you have to rotate the knob too fast/slow.
-#define BRIGHTNESS_DIV 1
+#define BRIGHTNESS_DIV 4
 #define CHANNEL_DIV 1
 #define MODE_DIV 1
 //How long it takes before the dimmer goes into edit mode
@@ -195,11 +195,11 @@ void DMX_init(){
 	PORTD_PIN2CTRL = PORT_OPC_PULLUP_gc | PORT_ISC_BOTHEDGES_gc | PORT_INVEN_bm; //Setup pin for DMX dead time timing
 	EVSYS_CH2MUX = EVSYS_CHMUX_PORTD_PIN2_gc; 
 	//Enable TCC1
-	TCC1_CTRLA = TC_CLKSEL_DIV64_gc; //Set CLK/64
+	TCC1_CTRLA = TC_CLKSEL_DIV8_gc; //Set CLK/8
 	TCC1_CTRLB = TC_WGMODE_NORMAL_gc;//Set WGM to FRQ
 	//TCC1_INTCTRLA = TC_OVFINTLVL_HI_gc; //Set OVF int priority to HIGH
 	TCC1_CTRLD = TC_EVACT_RESTART_gc | TC_EVSEL_CH2_gc;
-	TCC1_PER = 599; //Interrupt every 1196 us
+	TCC1_PER = 349; //Interrupt every 87 us
 	//Setup USART
 	//USARTD0_CTRLA = USART_RXCINTLVL_MED_gc;
 	//USARTD0_CTRLB = USART_RXEN_bm;
@@ -652,34 +652,38 @@ ISR(RTC_OVF_vect){
 
 ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
 	uint16_t USART_data = USARTD0_DATA;
-	if(cnt == DMXChan){//If DMX channel matches the set DMX channel
-		finalRes = USART_data << 8; //Buffer 8 MSB
-		//LCD_PRINTDEC(USART_data, 16, 5);
-	}
-	if(cnt == DMXChan + 1){//If DMX channel matches the set DMX channel + 1
-		//LCD_PRINTDEC(USART_data, 0, 5);
-		finalRes |= USART_data; //Buffer LSB
-		TCE0_CCABUF = finalRes; //Set compare register for PWM
+	if(!(USARTD0_STATUS & USART_FERR_bm)){
+		if(cnt == DMXChan){//If DMX channel matches the set DMX channel
+			finalRes = USART_data << 8; //Buffer 8 MSB
+			//LCD_PRINTDEC(USART_data, 16, 5);
+		}
+		if(cnt == DMXChan + 1){//If DMX channel matches the set DMX channel + 1
+			//LCD_PRINTDEC(USART_data, 0, 5);
+			finalRes |= USART_data; //Buffer LSB
+			TCE0_CCABUF = finalRes; //Set compare register for PWM
 		
-		lt = true;
-	}
-
-	if(DMXErrFlag){
-		lt = true;
-		if(cnt == 0 && USART_data == 0){
-			DMXErrFlag = false;
-			LCD_PRINT("      ", 10);
 			lt = true;
 		}
+
+		if(DMXErrFlag){
+			lt = true;
+			if(cnt == 0 && USART_data == 0){
+				DMXErrFlag = false;
+				LCD_PRINT("      ", 10);
+				lt = true;
+			}
+		}
+		DMXErrCnt = 0;
+		cnt++;//Increment channel counter
 	}
-	DMXErrCnt = 0;
-	cnt++;//Increment channel counter
 }
 
 ISR(TCC1_OVF_vect){
-	cnt = 0; //Reset counter if there hasn't been any signal change in 1196 us on the DMX line (PD2)
-	DMXErrCnt++;
-	if((DMXErrCnt > 836) && !DMXErrFlag){ //If there hasn't been any change in 1 second
+	if(PORTD_IN & (1 << 2)){
+		cnt = 0; //Reset counter if there hasn't been any signal change in 87 us on the DMX line (PD2)
+		DMXErrCnt++;
+	}
+	if((DMXErrCnt > 11494) && !DMXErrFlag){ //If there hasn't been any change in 1 second
 		DMXErrFlag = true;
 		LCD_PRINT("NO DMX", 10);
 		lt = true;
@@ -693,6 +697,7 @@ int main(void)
 	PORTC_DIRSET = (1 << MOSI_PIN) | (1 << SS_PIN) | (1 << SCK_PIN) | (1 << RS_PIN); //Set all pins used for communication to output
 	clk_set_32MHz();
 	_delay_ms(70);
+	setup_PWM();
 	update_RAM_EEPROM();
     setup_SPI();
     _delay_ms(100);
@@ -703,7 +708,7 @@ int main(void)
 	DMX_init();
 	updateDisp();
 	setup_int();
-	setup_PWM();
+	
 
     while (1) 
     {
