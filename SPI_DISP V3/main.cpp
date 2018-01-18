@@ -85,8 +85,10 @@ volatile bool longPressDetection = false;
 void clk_set_32MHz(){
 	OSC_CTRL |= OSC_RC32MEN_bm; //Setup 32Mhz crystal
 	while(!(OSC_STATUS & OSC_RC32MRDY_bm));
+	_delay_ms(1);
 	CCP = CCP_IOREG_gc; //Trigger protection mechanism
 	CLK_CTRL = CLK_SCLKSEL_RC32M_gc; //Enable internal  32Mhz crystal (1)
+	_delay_ms(1);
 }
 //Except for send_SPI
 inline void send_SPI(uint8_t SPIdata){
@@ -651,8 +653,9 @@ ISR(RTC_OVF_vect){
 }
 
 ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
+	bool FERR_flag = USARTD0_STATUS & USART_FERR_bm;
 	uint16_t USART_data = USARTD0_DATA;
-	if(!(USARTD0_STATUS & USART_FERR_bm)){
+	if(!FERR_flag){
 		if(cnt == DMXChan){//If DMX channel matches the set DMX channel
 			finalRes = USART_data << 8; //Buffer 8 MSB
 			//LCD_PRINTDEC(USART_data, 16, 5);
@@ -676,13 +679,13 @@ ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
 		DMXErrCnt = 0;
 		cnt++;//Increment channel counter
 	}
+	else{
+		cnt = 0;
+	}
 }
 
 ISR(TCC1_OVF_vect){
-	if(PORTD_IN & (1 << 2)){
-		cnt = 0; //Reset counter if there hasn't been any signal change in 87 us on the DMX line (PD2)
-		DMXErrCnt++;
-	}
+	DMXErrCnt++;
 	if((DMXErrCnt > 11494) && !DMXErrFlag){ //If there hasn't been any change in 1 second
 		DMXErrFlag = true;
 		LCD_PRINT("NO DMX", 10);
@@ -708,8 +711,6 @@ int main(void)
 	DMX_init();
 	updateDisp();
 	setup_int();
-	
-
     while (1) 
     {
 		if(editMode){ //If the display is in edit mode update the display
