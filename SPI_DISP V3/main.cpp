@@ -159,10 +159,11 @@ void setup_int(){
 }
 
 void setup_PWM(){
+	//Setup PWM for 14 bits to enable faster PWM
 	TCE0_CCA = 0;
-	TCE0_CTRLA = 0b10; //Set CLK/2
+	TCE0_CTRLA = 0b1; //Set CLK
 	TCE0_CTRLB = 0b11 | (1 << 4); //Set singleslope PWM and enable PWM on 0C1A
-	TCE0_PER = 0xFFFE; //Fixes problem that brightness doesn't go up to 100%
+	TCE0_PER = 0x3FFE; //Fixes problem that brightness doesn't go up to 100%
 	//Wait for timer to stabilize
 	_delay_ms(10);
 	PORTE_DIRSET |= (1 << 0);
@@ -377,7 +378,7 @@ void LCD_PRINT(char charBuf[32], uint8_t pos){
 
 void setScrnAndPWM(uint16_t tempVal){ //Update screen with brightness value and update PWM
 	uint16_t fullTemp = (double)tempVal * (double)tempVal * 0.11111;
-	TCE0_CCABUF = fullTemp;
+	TCE0_CCABUF = fullTemp >> 2; //14 bits
 	uint16_t dispVal = (double)tempVal / 7.68;
 	LCD_PRINTDEC(dispVal, 28, 0x3);
 }
@@ -663,7 +664,7 @@ ISR(USARTD0_RXC_vect){//Interrupt for new DMX char
 		if(cnt == DMXChan + 1){//If DMX channel matches the set DMX channel + 1
 			//LCD_PRINTDEC(USART_data, 0, 5);
 			finalRes |= USART_data; //Buffer LSB
-			TCE0_CCABUF = finalRes; //Set compare register for PWM
+			TCE0_CCABUF = finalRes >> 2; //Set compare register for PWM in 14 bits to make PWM frequency higher
 		
 			lt = true;
 		}
